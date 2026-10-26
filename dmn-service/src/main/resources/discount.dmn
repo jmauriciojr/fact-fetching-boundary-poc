@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dmn:definitions xmlns:dmn="https://www.omg.org/spec/DMN/20211108/MODEL/"
+                 xmlns:feel="https://www.omg.org/spec/DMN/20211108/FEEL/"
+                 id="_discount_approval"
+                 name="DiscountApproval"
+                 namespace="org.acme.dmn"
+                 expressionLanguage="https://www.omg.org/spec/DMN/20211108/FEEL/"
+                 typeLanguage="https://www.omg.org/spec/DMN/20211108/FEEL/">
+
+  <!-- ===================== Item Definitions (types) ===================== -->
+
+  <!-- Authoritative facts, fetched by the Boundary from the System of Record (CRM). -->
+  <dmn:itemDefinition id="_tFacts" name="tFacts" isCollection="false">
+    <dmn:itemComponent id="_tFacts_tier" name="tier" isCollection="false">
+      <dmn:typeRef>string</dmn:typeRef>
+    </dmn:itemComponent>
+    <dmn:itemComponent id="_tFacts_margin_pct" name="margin_pct" isCollection="false">
+      <dmn:typeRef>number</dmn:typeRef>
+    </dmn:itemComponent>
+    <dmn:itemComponent id="_tFacts_credit_hold" name="credit_hold" isCollection="false">
+      <dmn:typeRef>boolean</dmn:typeRef>
+    </dmn:itemComponent>
+  </dmn:itemDefinition>
+
+  <!-- Unverified claims made by the agent / end user. Never trusted as facts. -->
+  <dmn:itemDefinition id="_tClaimedFacts" name="tClaimedFacts" isCollection="false">
+    <dmn:itemComponent id="_tClaimedFacts_tier" name="tier" isCollection="false">
+      <dmn:typeRef>string</dmn:typeRef>
+    </dmn:itemComponent>
+  </dmn:itemDefinition>
+
+  <!-- Probabilistic intent produced by the LLM agent. -->
+  <dmn:itemDefinition id="_tIntent" name="tIntent" isCollection="false">
+    <dmn:itemComponent id="_tIntent_proposed_discount_pct" name="proposed_discount_pct" isCollection="false">
+      <dmn:typeRef>number</dmn:typeRef>
+    </dmn:itemComponent>
+    <dmn:itemComponent id="_tIntent_claimed_facts" name="claimed_facts" isCollection="false">
+      <dmn:typeRef>tClaimedFacts</dmn:typeRef>
+    </dmn:itemComponent>
+  </dmn:itemDefinition>
+
+  <!-- Compound result of the top-level decision. -->
+  <dmn:itemDefinition id="_tApprovalResult" name="tApprovalResult" isCollection="false">
+    <dmn:itemComponent id="_tApprovalResult_outcome" name="Outcome" isCollection="false">
+      <dmn:typeRef>string</dmn:typeRef>
+      <dmn:allowedValues id="_tApprovalResult_outcome_av">
+        <dmn:text>"APPROVED", "REJECTED", "REVIEW"</dmn:text>
+      </dmn:allowedValues>
+    </dmn:itemComponent>
+    <dmn:itemComponent id="_tApprovalResult_reason" name="Reason Code" isCollection="false">
+      <dmn:typeRef>string</dmn:typeRef>
+    </dmn:itemComponent>
+  </dmn:itemDefinition>
+
+  <!-- ===================== Input Data ===================== -->
+
+  <dmn:inputData id="_input_facts" name="facts">
+    <dmn:variable id="_input_facts_var" name="facts" typeRef="tFacts"/>
+  </dmn:inputData>
+
+  <dmn:inputData id="_input_intent" name="intent">
+    <dmn:variable id="_input_intent_var" name="intent" typeRef="tIntent"/>
+  </dmn:inputData>
+
+  <!-- ===================== D1: EntitledMaxDiscount ===================== -->
+
+  <dmn:decision id="_d1_entitled_max_discount" name="EntitledMaxDiscount">
+    <dmn:description>Maximum discount the customer is entitled to, derived from the authoritative tier.</dmn:description>
+    <dmn:variable id="_d1_var" name="EntitledMaxDiscount" typeRef="number"/>
+    <dmn:informationRequirement id="_d1_ir_facts">
+      <dmn:requiredInput href="#_input_facts"/>
+    </dmn:informationRequirement>
+    <dmn:decisionTable id="_d1_dt" hitPolicy="UNIQUE" outputLabel="EntitledMaxDiscount">
+      <dmn:input id="_d1_in_tier" label="facts.tier">
+        <dmn:inputExpression id="_d1_in_tier_expr" typeRef="string">
+          <dmn:text>facts.tier</dmn:text>
+        </dmn:inputExpression>
+      </dmn:input>
+      <dmn:output id="_d1_out"/>
+      <dmn:rule id="_d1_r1">
+        <dmn:inputEntry id="_d1_r1_i1"><dmn:text>"standard"</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d1_r1_o1"><dmn:text>10</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+      <dmn:rule id="_d1_r2">
+        <dmn:inputEntry id="_d1_r2_i1"><dmn:text>"premium"</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d1_r2_o1"><dmn:text>20</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+    </dmn:decisionTable>
+  </dmn:decision>
+
+  <!-- ===================== D2: ClaimEscalation ===================== -->
+
+  <dmn:decision id="_d2_claim_escalation" name="ClaimEscalation">
+    <dmn:description>True when the agent claims a premium tier that the System of Record does not confirm.</dmn:description>
+    <dmn:variable id="_d2_var" name="ClaimEscalation" typeRef="boolean"/>
+    <dmn:informationRequirement id="_d2_ir_intent">
+      <dmn:requiredInput href="#_input_intent"/>
+    </dmn:informationRequirement>
+    <dmn:informationRequirement id="_d2_ir_facts">
+      <dmn:requiredInput href="#_input_facts"/>
+    </dmn:informationRequirement>
+    <dmn:literalExpression id="_d2_le" typeRef="boolean">
+      <dmn:text>intent.claimed_facts.tier = "premium" and facts.tier != "premium"</dmn:text>
+    </dmn:literalExpression>
+  </dmn:decision>
+
+  <!-- ===================== D3: DiscountApproval ===================== -->
+
+  <dmn:decision id="_d3_discount_approval" name="DiscountApproval">
+    <dmn:description>Final policy deliberation: combines authoritative facts, entitlement and escalation signal.</dmn:description>
+    <dmn:variable id="_d3_var" name="DiscountApproval" typeRef="tApprovalResult"/>
+    <dmn:informationRequirement id="_d3_ir_facts">
+      <dmn:requiredInput href="#_input_facts"/>
+    </dmn:informationRequirement>
+    <dmn:informationRequirement id="_d3_ir_intent">
+      <dmn:requiredInput href="#_input_intent"/>
+    </dmn:informationRequirement>
+    <dmn:informationRequirement id="_d3_ir_d1">
+      <dmn:requiredDecision href="#_d1_entitled_max_discount"/>
+    </dmn:informationRequirement>
+    <dmn:informationRequirement id="_d3_ir_d2">
+      <dmn:requiredDecision href="#_d2_claim_escalation"/>
+    </dmn:informationRequirement>
+    <dmn:decisionTable id="_d3_dt" hitPolicy="UNIQUE" outputLabel="DiscountApproval">
+      <dmn:input id="_d3_in_credit_hold" label="facts.credit_hold">
+        <dmn:inputExpression id="_d3_in_credit_hold_expr" typeRef="boolean">
+          <dmn:text>facts.credit_hold</dmn:text>
+        </dmn:inputExpression>
+      </dmn:input>
+      <dmn:input id="_d3_in_margin" label="facts.margin_pct">
+        <dmn:inputExpression id="_d3_in_margin_expr" typeRef="number">
+          <dmn:text>facts.margin_pct</dmn:text>
+        </dmn:inputExpression>
+      </dmn:input>
+      <dmn:input id="_d3_in_within" label="proposed_discount_pct &lt;= EntitledMaxDiscount">
+        <dmn:inputExpression id="_d3_in_within_expr" typeRef="boolean">
+          <dmn:text>intent.proposed_discount_pct &lt;= EntitledMaxDiscount</dmn:text>
+        </dmn:inputExpression>
+      </dmn:input>
+      <dmn:input id="_d3_in_escalation" label="ClaimEscalation">
+        <dmn:inputExpression id="_d3_in_escalation_expr" typeRef="boolean">
+          <dmn:text>ClaimEscalation</dmn:text>
+        </dmn:inputExpression>
+      </dmn:input>
+      <dmn:output id="_d3_out_outcome" name="Outcome" typeRef="string">
+        <dmn:outputValues id="_d3_out_outcome_values">
+          <dmn:text>"APPROVED", "REJECTED", "REVIEW"</dmn:text>
+        </dmn:outputValues>
+      </dmn:output>
+      <dmn:output id="_d3_out_reason" name="Reason Code" typeRef="string"/>
+
+      <!-- credit_hold | margin_pct | within entitlement | escalation -> Outcome, Reason Code -->
+      <dmn:rule id="_d3_r1">
+        <dmn:inputEntry id="_d3_r1_i1"><dmn:text>true</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r1_i2"><dmn:text>-</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r1_i3"><dmn:text>-</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r1_i4"><dmn:text>-</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d3_r1_o1"><dmn:text>"REJECTED"</dmn:text></dmn:outputEntry>
+        <dmn:outputEntry id="_d3_r1_o2"><dmn:text>"CREDIT_HOLD"</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+      <dmn:rule id="_d3_r2">
+        <dmn:inputEntry id="_d3_r2_i1"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r2_i2"><dmn:text>&lt; 15</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r2_i3"><dmn:text>-</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r2_i4"><dmn:text>-</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d3_r2_o1"><dmn:text>"REJECTED"</dmn:text></dmn:outputEntry>
+        <dmn:outputEntry id="_d3_r2_o2"><dmn:text>"MARGIN_BELOW_FLOOR"</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+      <dmn:rule id="_d3_r3">
+        <dmn:inputEntry id="_d3_r3_i1"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r3_i2"><dmn:text>&gt;= 15</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r3_i3"><dmn:text>true</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r3_i4"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d3_r3_o1"><dmn:text>"APPROVED"</dmn:text></dmn:outputEntry>
+        <dmn:outputEntry id="_d3_r3_o2"><dmn:text>"WITHIN_ENTITLEMENT"</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+      <dmn:rule id="_d3_r4">
+        <dmn:inputEntry id="_d3_r4_i1"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r4_i2"><dmn:text>&gt;= 15</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r4_i3"><dmn:text>true</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r4_i4"><dmn:text>true</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d3_r4_o1"><dmn:text>"APPROVED"</dmn:text></dmn:outputEntry>
+        <dmn:outputEntry id="_d3_r4_o2"><dmn:text>"WITHIN_ENTITLEMENT_ESCALATION_LOGGED"</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+      <dmn:rule id="_d3_r5">
+        <dmn:inputEntry id="_d3_r5_i1"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r5_i2"><dmn:text>&gt;= 15</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r5_i3"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r5_i4"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d3_r5_o1"><dmn:text>"REJECTED"</dmn:text></dmn:outputEntry>
+        <dmn:outputEntry id="_d3_r5_o2"><dmn:text>"EXCEEDS_ENTITLEMENT"</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+      <dmn:rule id="_d3_r6">
+        <dmn:inputEntry id="_d3_r6_i1"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r6_i2"><dmn:text>&gt;= 15</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r6_i3"><dmn:text>false</dmn:text></dmn:inputEntry>
+        <dmn:inputEntry id="_d3_r6_i4"><dmn:text>true</dmn:text></dmn:inputEntry>
+        <dmn:outputEntry id="_d3_r6_o1"><dmn:text>"REVIEW"</dmn:text></dmn:outputEntry>
+        <dmn:outputEntry id="_d3_r6_o2"><dmn:text>"ESCALATION_EXCEEDS_ENTITLEMENT"</dmn:text></dmn:outputEntry>
+      </dmn:rule>
+    </dmn:decisionTable>
+  </dmn:decision>
+
+</dmn:definitions>
